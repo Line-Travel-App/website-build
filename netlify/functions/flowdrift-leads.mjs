@@ -3,17 +3,17 @@ var getString = (input) => typeof input === "string" ? input : JSON.stringify(in
 var base64Decode = globalThis.Buffer ? (input) => Buffer.from(input, "base64").toString() : (input) => atob(input);
 var base64Encode = globalThis.Buffer ? (input) => Buffer.from(getString(input)).toString("base64") : (input) => btoa(getString(input));
 var getEnvironment = () => {
-  const { Deno, Netlify, process: process2 } = globalThis;
+  const { Deno, Netlify, process } = globalThis;
   return Netlify?.env ?? Deno?.env ?? {
-    delete: (key) => delete process2?.env[key],
-    get: (key) => process2?.env[key],
-    has: (key) => Boolean(process2?.env[key]),
+    delete: (key) => delete process?.env[key],
+    get: (key) => process?.env[key],
+    has: (key) => Boolean(process?.env[key]),
     set: (key, value) => {
-      if (process2?.env) {
-        process2.env[key] = value;
+      if (process?.env) {
+        process.env[key] = value;
       }
     },
-    toObject: () => process2?.env ?? {}
+    toObject: () => process?.env ?? {}
   };
 };
 
@@ -809,6 +809,7 @@ var allowedFormTypes = /* @__PURE__ */ new Set([
 var rateLimit = /* @__PURE__ */ new Map();
 var WINDOW_MS = 10 * 60 * 1e3;
 var MAX_REQUESTS = 5;
+var FORMSPREE_ENDPOINT = "https://formspree.io/f/xgvavvgl";
 async function handler(event) {
   connectLambda(event);
   return processLeadRequest(event);
@@ -837,7 +838,12 @@ async function processLeadRequest(event, dependencies = {}) {
     return jsonResponse(503, { message: "We could not securely save your request. Please try again or email info.line@apphona.com." }, headers);
   }
   const sendNotification = dependencies.notifyAdmin || notifyAdmin;
-  sendNotification(lead).catch((error) => console.error("FlowDrift lead notification failed:", error instanceof Error ? error.message : "Unknown error"));
+  try {
+    await sendNotification(lead);
+  } catch (error) {
+    console.error("FlowDrift lead notification failed:", error instanceof Error ? error.message : "Unknown error");
+    return jsonResponse(502, { message: "Your request was saved, but the email notification could not be delivered. Please try again." }, headers);
+  }
   return jsonResponse(201, { ok: true, id: lead.id }, headers);
 }
 function jsonResponse(statusCode, value, headers) {
@@ -927,30 +933,41 @@ async function persistLead(lead, configuredStore) {
     onlyIfNew: true
   });
 }
-async function notifyAdmin(lead) {
-  if (!process.env.EMAIL_PROVIDER_API_KEY || !process.env.LEAD_NOTIFICATION_EMAIL || !process.env.LEAD_NOTIFICATION_FROM) return;
-  const subject = lead.form_type === "DESIGN_PARTNER_APPLICATION" ? "New FlowDrift Design Partner Application" : `New FlowDrift lead: ${lead.form_type}`;
-  const text = [
-    subject,
-    `Name: ${lead.name || "Not provided"}`,
-    `Email: ${lead.email}`,
-    `Company: ${lead.company}`,
-    `Role: ${lead.role}`,
-    `Developer count: ${lead.developer_count || "Not provided"}`,
-    `Data sharing: ${lead.data_sharing_willingness || "Not provided"}`,
-    `Challenge: ${lead.challenge || "Not provided"}`,
-    `Source: ${lead.source_page}`
+async function notifyAdmin(lead, request = fetch) {
+  const formLabel = lead.form_type === "DESIGN_PARTNER_APPLICATION" ? "Design Partner Application" : lead.form_type === "HEALTH_REPORT_REQUEST" ? "Engineering Health Analysis Request" : "Early Access Request";
+  const subjectCompany = lead.company.replace(/[\r\n]+/g, " ").slice(0, 120);
+  const submittedFields = Object.entries(lead.submitted_data).map(([key, value]) => `${key}: ${value || "Not provided"}`).join("\n");
+  const message = [
+    `New FlowDrift ${formLabel}`,
+    `Lead ID: ${lead.id}`,
+    "",
+    submittedFields,
+    "",
+    `Source: ${lead.source_page}`,
+    `UTM: ${JSON.stringify(lead.utm)}`,
+    `Created: ${lead.created_at}`
   ].join("\n");
-  const result = await fetch("https://api.resend.com/emails", {
+  const result = await request(FORMSPREE_ENDPOINT, {
     method: "POST",
-    headers: { Authorization: `Bearer ${process.env.EMAIL_PROVIDER_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ from: process.env.LEAD_NOTIFICATION_FROM, to: [process.env.LEAD_NOTIFICATION_EMAIL], subject, text })
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({
+      subject: `[FlowDrift] New ${formLabel} \u2014 ${subjectCompany}`,
+      name: lead.name || "FlowDrift applicant",
+      email: lead.email,
+      message,
+      formType: lead.form_type,
+      company: lead.company,
+      role: lead.role,
+      leadId: lead.id
+    }),
+    signal: AbortSignal.timeout(8e3)
   });
-  if (!result.ok) throw new Error(`Email provider returned ${result.status}`);
+  if (!result.ok) throw new Error(`Formspree returned ${result.status}`);
 }
 export {
   createLead,
   handler,
+  notifyAdmin,
   persistLead,
   processLeadRequest,
   validatePayload
