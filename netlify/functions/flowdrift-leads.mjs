@@ -46,6 +46,10 @@ var getEnvironmentContext = () => {
   }
   return {};
 };
+var setEnvironmentContext = (context) => {
+  const encodedContext = base64Encode(JSON.stringify(context));
+  getEnvironment().set("NETLIFY_BLOBS_CONTEXT", encodedContext);
+};
 var MissingBlobsEnvironmentError = class extends Error {
   constructor(requiredProperties) {
     super(
@@ -342,6 +346,17 @@ var getClientOptions = (options, contextOverride) => {
 };
 
 // node_modules/@netlify/blobs/dist/main.js
+var connectLambda = (event) => {
+  const rawData = base64Decode(event.blobs);
+  const data = JSON.parse(rawData);
+  const environmentContext = {
+    deployID: event.headers["x-nf-deploy-id"],
+    edgeURL: data.url,
+    siteID: event.headers["x-nf-site-id"],
+    token: data.token
+  };
+  setEnvironmentContext(environmentContext);
+};
 var LEGACY_STORE_INTERNAL_PREFIX = "netlify-internal/legacy-namespace/";
 var STATUS_OK = 200;
 var STATUS_PRE_CONDITION_FAILED = 412;
@@ -795,6 +810,7 @@ var rateLimit = /* @__PURE__ */ new Map();
 var WINDOW_MS = 10 * 60 * 1e3;
 var MAX_REQUESTS = 5;
 async function handler(event) {
+  connectLambda(event);
   return processLeadRequest(event);
 }
 async function processLeadRequest(event, dependencies = {}) {
