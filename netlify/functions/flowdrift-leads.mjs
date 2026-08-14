@@ -917,7 +917,7 @@ function sanitizeObject(value) {
   );
 }
 async function persistLead(lead, configuredStore) {
-  const store = configuredStore || getStore({ name: "flowdrift-leads", consistency: "strong" });
+  const store = configuredStore || getStore("flowdrift-leads");
   await store.setJSON(lead.id, lead, {
     metadata: {
       formType: lead.form_type,
