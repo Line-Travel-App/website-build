@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /flowdrift/
+
+Sitemap: https://apphona.com/flowdrift/sitemap.xml
